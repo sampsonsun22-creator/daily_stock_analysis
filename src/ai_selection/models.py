@@ -7,7 +7,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ScreenRow:
-    """One normalized row returned by the read-only market screener."""
+    """One normalized row returned by a read-only market screener."""
 
     code: str
     name: str
@@ -15,6 +15,7 @@ class ScreenRow:
     change_pct: float | None
     amount: float | None
     turnover_rate: float | None
+    source: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class PrefilterCandidate:
     name: str
     prefilter_score: float
     metrics: tuple[str, ...]
+    sources: tuple[str, ...] = ()
     price: float | None = None
     change_pct: float | None = None
     amount: float | None = None
