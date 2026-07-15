@@ -68,10 +68,17 @@ jobs:
 
           payload = json.loads(Path("/tmp/vibe-market-screen.json").read_text(encoding="utf-8").splitlines()[-1])
           assert payload.get("ok") is True, payload
-          rows = payload.get("data", {}).get("rows", [])
+          data = payload.get("data", {})
+          rows = data.get("rows", [])
           assert isinstance(rows, list), payload
           assert rows, "Vibe sidecar returned an empty A-share screen"
-          print(f"Vibe sidecar returned {len(rows)} A-share rows")
+          contract = data.get("unit_contract", {})
+          assert contract.get("normalization_version") == "a_share_eastmoney_v1", contract
+          assert contract.get("price") == "CNY", contract
+          assert contract.get("change_pct") == "percentage_points", contract
+          assert contract.get("volume") == "shares", contract
+          print(f"Vibe sidecar returned {len(rows)} normalized A-share rows")
+          print(json.dumps(rows[0], ensure_ascii=False, sort_keys=True))
           PY
 
       - name: Upload market-screen evidence
