@@ -13,7 +13,7 @@ def _scaled(value: Any, multiplier: float) -> Any:
     if value is None or value == "-":
         return value
     try:
-        return float(value) * multiplier
+        return round(float(value) * multiplier, 6)
     except (TypeError, ValueError):
         return value
 
