@@ -15,6 +15,7 @@ class ScreenRow:
     change_pct: float | None
     amount: float | None
     turnover_rate: float | None
+    volume: float | None = None
     source: str = "unknown"
 
 
@@ -31,6 +32,7 @@ class PrefilterCandidate:
     change_pct: float | None = None
     amount: float | None = None
     turnover_rate: float | None = None
+    volume: float | None = None
 
 
 @dataclass(frozen=True)
