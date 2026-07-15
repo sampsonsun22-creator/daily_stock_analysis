@@ -107,8 +107,10 @@ class SelectionScorer:
         )
         final_score = _clip(final_score)
 
+        source_text = "/".join(prefilter.sources) if prefilter.sources else "unknown"
         reasons = [
             f"市场预筛={prefilter.prefilter_score:.3f} ({'/'.join(prefilter.metrics)})",
+            f"预筛来源={source_text}",
             f"趋势={trend:.3f}",
             f"综合分析={sentiment:.3f}",
             f"决策={decision:.3f}",
