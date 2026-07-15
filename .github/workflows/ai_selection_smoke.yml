@@ -31,7 +31,13 @@ jobs:
           cache: pip
 
       - name: Install pinned Vibe sidecar
-        run: bash scripts/install_ai_selection_upstreams.sh
+        shell: bash
+        run: |
+          set +e
+          bash scripts/install_ai_selection_upstreams.sh > /tmp/vibe-install.log 2>&1
+          status=$?
+          tail -n 160 /tmp/vibe-install.log
+          exit "$status"
 
       - name: Verify isolated A-share market screen
         shell: bash
