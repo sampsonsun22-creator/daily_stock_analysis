@@ -1,0 +1,147 @@
+name: A股 AI 选股
+
+on:
+  schedule:
+    - cron: "20 10 * * 1-5" # 北京时间工作日 18:20
+  workflow_dispatch:
+    inputs:
+      candidate_limit:
+        description: 深度分析候选数量
+        required: true
+        default: "12"
+      top_n:
+        description: 最终入选数量
+        required: true
+        default: "6"
+      notify:
+        description: 发送到已配置通知渠道
+        required: true
+        default: true
+        type: boolean
+      force_run:
+        description: 非交易日强制运行
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ai-selection-production
+  cancel-in-progress: false
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装主项目
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 安装固定版本 Vibe-Trading 侧车
+        run: bash scripts/install_ai_selection_upstreams.sh
+
+      - name: 运行真实选股
+        env:
+          LITELLM_CONFIG: ${{ vars.LITELLM_CONFIG || secrets.LITELLM_CONFIG }}
+          LITELLM_CONFIG_YAML: ${{ vars.LITELLM_CONFIG_YAML || secrets.LITELLM_CONFIG_YAML }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+          GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash' }}
+          AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+          MINIMAX_API_KEYS: ${{ secrets.MINIMAX_API_KEYS }}
+          BRAVE_API_KEYS: ${{ secrets.BRAVE_API_KEYS }}
+          SEARXNG_BASE_URLS: ${{ secrets.SEARXNG_BASE_URLS }}
+          SEARXNG_PUBLIC_INSTANCES_ENABLED: ${{ vars.SEARXNG_PUBLIC_INSTANCES_ENABLED || secrets.SEARXNG_PUBLIC_INSTANCES_ENABLED }}
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          WECHAT_MSG_TYPE: ${{ vars.WECHAT_MSG_TYPE || secrets.WECHAT_MSG_TYPE || 'markdown' }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+          EMAIL_SENDER: ${{ vars.EMAIL_SENDER || secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVERS: ${{ vars.EMAIL_RECEIVERS || secrets.EMAIL_RECEIVERS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          CUSTOM_WEBHOOK_URLS: ${{ secrets.CUSTOM_WEBHOOK_URLS }}
+          CUSTOM_WEBHOOK_BEARER_TOKEN: ${{ secrets.CUSTOM_WEBHOOK_BEARER_TOKEN }}
+          AGENT_MODE: ${{ vars.AI_SELECTION_AGENT_MODE || 'false' }}
+          AGENT_ARCH: ${{ vars.AI_SELECTION_AGENT_ARCH || 'single' }}
+          AGENT_ORCHESTRATOR_MODE: ${{ vars.AI_SELECTION_ORCHESTRATOR_MODE || 'standard' }}
+          AGENT_RISK_OVERRIDE: "true"
+          REPORT_TYPE: simple
+          MARKET_REVIEW_ENABLED: "false"
+          SINGLE_STOCK_NOTIFY: "false"
+          ENABLE_CHIP_DISTRIBUTION: "false"
+          MAX_WORKERS: "2"
+          PREFETCH_REALTIME_QUOTES: "false"
+          AI_SELECTION_OUTPUT_DIR: data/ai_selection
+          AI_SELECTION_CANDIDATE_LIMIT: ${{ vars.AI_SELECTION_CANDIDATE_LIMIT || '12' }}
+          AI_SELECTION_TOP_N: ${{ vars.AI_SELECTION_TOP_N || '6' }}
+        shell: bash
+        run: |
+          if [ -n "$LITELLM_CONFIG_YAML" ] && [ -n "$LITELLM_CONFIG" ]; then
+            mkdir -p "$(dirname "$LITELLM_CONFIG")"
+            printf '%s\n' "$LITELLM_CONFIG_YAML" > "$LITELLM_CONFIG"
+          fi
+
+          CANDIDATE_LIMIT="${AI_SELECTION_CANDIDATE_LIMIT:-12}"
+          TOP_N="${AI_SELECTION_TOP_N:-6}"
+          NOTIFY="true"
+          FORCE_RUN="false"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            CANDIDATE_LIMIT="${{ inputs.candidate_limit }}"
+            TOP_N="${{ inputs.top_n }}"
+            NOTIFY="${{ inputs.notify }}"
+            FORCE_RUN="${{ inputs.force_run }}"
+          fi
+
+          EXTRA_ARGS=()
+          if [ "$NOTIFY" = "true" ]; then
+            EXTRA_ARGS+=(--notify)
+          fi
+          if [ "$FORCE_RUN" = "true" ]; then
+            EXTRA_ARGS+=(--force-run)
+          fi
+
+          mkdir -p data/ai_selection logs reports
+          python ai_select.py \
+            --source market \
+            --metrics amount,turnover \
+            --screen-per-metric 60 \
+            --candidate-limit "$CANDIDATE_LIMIT" \
+            --top-n "$TOP_N" \
+            "${EXTRA_ARGS[@]}"
+
+      - name: 上传选股结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-selection-${{ github.run_id }}
+          path: |
+            data/ai_selection/*.json
+            logs/ai_selection*.log
+          if-no-files-found: warn
+          retention-days: 30

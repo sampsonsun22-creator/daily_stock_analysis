@@ -1,0 +1,91 @@
+name: AI Selection Integration Smoke
+
+on:
+  pull_request:
+    paths:
+      - "ai_select.py"
+      - "ai_selection_upstreams.lock.json"
+      - "src/ai_selection/**"
+      - "scripts/install_ai_selection_upstreams.sh"
+      - "scripts/vibe_market_screen.py"
+      - ".github/workflows/ai_selection*.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ai-selection-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vibe-sidecar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned Vibe sidecar
+        shell: bash
+        run: |
+          set +e
+          bash scripts/install_ai_selection_upstreams.sh > /tmp/vibe-install.log 2>&1
+          status=$?
+          tail -n 160 /tmp/vibe-install.log
+          exit "$status"
+
+      - name: Upload Vibe installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-install-log-${{ github.run_id }}
+          path: /tmp/vibe-install.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Probe Vibe public A-share endpoint
+        continue-on-error: true
+        shell: bash
+        run: |
+          # The provider is deliberately probed, but a transient public-endpoint
+          # outage must not misclassify a successful pinned installation. The
+          # production selector has a Tushare EOD fallback and remains fail-closed
+          # only when every configured provider is unavailable.
+          VIBE_PYTHON="$HOME/.dsa-ai/upstreams/venvs/vibe/bin/python"
+          "$VIBE_PYTHON" scripts/vibe_market_screen.py \
+            --market a \
+            --sort-by amount \
+            --top-n 5 | tee /tmp/vibe-market-screen.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/vibe-market-screen.json").read_text(encoding="utf-8").splitlines()[-1])
+          assert payload.get("ok") is True, payload
+          data = payload.get("data", {})
+          rows = data.get("rows", [])
+          assert isinstance(rows, list), payload
+          assert rows, "Vibe sidecar returned an empty A-share screen"
+          contract = data.get("unit_contract", {})
+          assert contract.get("normalization_version") == "a_share_eastmoney_v1", contract
+          assert contract.get("price") == "CNY", contract
+          assert contract.get("change_pct") == "percentage_points", contract
+          assert contract.get("volume") == "shares", contract
+          print(f"Vibe sidecar returned {len(rows)} normalized A-share rows")
+          print(json.dumps(rows[0], ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Upload market-screen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-a-share-screen-${{ github.run_id }}
+          path: /tmp/vibe-market-screen.json
+          if-no-files-found: warn
+          retention-days: 7

@@ -11,6 +11,7 @@ API v1 Endpoints 模块初始化
 from api.v1.endpoints import (
     health,
     analysis,
+    ai_selection,
     history,
     stocks,
     backtest,
@@ -20,9 +21,11 @@ from api.v1.endpoints import (
     usage,
     portfolio,
 )
+
 __all__ = [
     "health",
     "analysis",
+    "ai_selection",
     "history",
     "stocks",
     "backtest",
