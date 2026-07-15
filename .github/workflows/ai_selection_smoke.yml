@@ -1,0 +1,54 @@
+name: AI Selection Integration Smoke
+
+on:
+  pull_request:
+    paths:
+      - "ai_select.py"
+      - "ai_selection_upstreams.lock.json"
+      - "src/ai_selection/**"
+      - "scripts/install_ai_selection_upstreams.sh"
+      - "scripts/vibe_market_screen.py"
+      - ".github/workflows/ai_selection*.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ai-selection-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vibe-sidecar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned Vibe sidecar
+        run: bash scripts/install_ai_selection_upstreams.sh
+
+      - name: Verify isolated A-share market screen
+        shell: bash
+        run: |
+          VIBE_PYTHON="$HOME/.dsa-ai/upstreams/venvs/vibe/bin/python"
+          "$VIBE_PYTHON" scripts/vibe_market_screen.py \
+            --market a \
+            --sort-by amount \
+            --top-n 5 | tee /tmp/vibe-market-screen.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/vibe-market-screen.json").read_text(encoding="utf-8").splitlines()[-1])
+          assert payload.get("ok") is True, payload
+          rows = payload.get("data", {}).get("rows", [])
+          assert isinstance(rows, list), payload
+          print(f"Vibe sidecar returned {len(rows)} A-share rows")
+          PY
