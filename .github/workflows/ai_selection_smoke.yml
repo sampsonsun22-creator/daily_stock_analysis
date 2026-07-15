@@ -65,5 +65,15 @@ jobs:
           assert payload.get("ok") is True, payload
           rows = payload.get("data", {}).get("rows", [])
           assert isinstance(rows, list), payload
+          assert rows, "Vibe sidecar returned an empty A-share screen"
           print(f"Vibe sidecar returned {len(rows)} A-share rows")
           PY
+
+      - name: Upload market-screen evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibe-a-share-screen-${{ github.run_id }}
+          path: /tmp/vibe-market-screen.json
+          if-no-files-found: warn
+          retention-days: 7
