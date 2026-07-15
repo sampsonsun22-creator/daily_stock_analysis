@@ -11,14 +11,19 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from src.config import get_config, setup_env
 
 setup_env()
 
 from src.ai_selection.models import PrefilterCandidate
-from src.ai_selection.screening import VibeMarketScreener, build_candidate_pool
+from src.ai_selection.screening import (
+    CompositeMarketScreener,
+    TushareEodScreener,
+    VibeMarketScreener,
+    build_candidate_pool,
+)
 from src.ai_selection.service import AISelectionService
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.trading_calendar import get_open_markets_today
@@ -48,7 +53,7 @@ def _parse_metrics(value: str) -> tuple[str, ...]:
     return metrics
 
 
-def _manual_candidates(codes: Iterable[str]) -> list[PrefilterCandidate]:
+def _manual_candidates(codes: Iterable[str], *, source: str) -> list[PrefilterCandidate]:
     normalized = list(
         dict.fromkeys(str(code).strip().upper() for code in codes if str(code).strip())
     )
@@ -58,7 +63,8 @@ def _manual_candidates(codes: Iterable[str]) -> list[PrefilterCandidate]:
             code=code,
             name=code,
             prefilter_score=round(1.0 - index / (2.0 * total), 6),
-            metrics=("manual",),
+            metrics=(source,),
+            sources=(source,),
         )
         for index, code in enumerate(normalized)
     ]
@@ -66,9 +72,14 @@ def _manual_candidates(codes: Iterable[str]) -> list[PrefilterCandidate]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="全市场预筛 → 现有 AI 分析流水线 → 确定性综合排名"
+        description="多源全市场预筛 → 现有 AI 分析流水线 → 确定性综合排名"
     )
-    parser.add_argument("--source", choices=("vibe", "watchlist", "manual"), default="vibe")
+    parser.add_argument(
+        "--source",
+        choices=("market", "vibe", "tushare", "watchlist", "manual"),
+        default="market",
+        help="market=Vibe 优先、Tushare 收盘快照自动兜底",
+    )
     parser.add_argument("--stocks", help="manual 模式股票代码，逗号分隔")
     parser.add_argument("--metrics", type=_parse_metrics, default=("amount", "turnover"))
     parser.add_argument("--screen-per-metric", type=int, default=60)
@@ -87,29 +98,69 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_prefilter(args: argparse.Namespace, config) -> list[PrefilterCandidate]:
-    if args.source == "manual":
-        if not args.stocks:
-            raise ValueError("manual source requires --stocks")
-        return _manual_candidates(args.stocks.split(","))
-    if args.source == "watchlist":
-        config.refresh_stock_list()
-        return _manual_candidates(config.stock_list)
-
+def _build_market_screener(args: argparse.Namespace) -> CompositeMarketScreener:
     bridge = Path(__file__).resolve().parent / "scripts" / "vibe_market_screen.py"
-    screener = VibeMarketScreener(
+    vibe = VibeMarketScreener(
         python_executable=args.vibe_python,
         bridge_script=bridge,
     )
-    screens = {
-        metric: screener.screen(metric=metric, top_n=args.screen_per_metric)
-        for metric in args.metrics
-    }
-    return build_candidate_pool(
+    tushare = TushareEodScreener(token=os.getenv("TUSHARE_TOKEN"))
+
+    if args.source == "vibe":
+        providers = (("vibe", vibe),)
+    elif args.source == "tushare":
+        providers = (("tushare", tushare),)
+    else:
+        providers = (("vibe", vibe), ("tushare", tushare))
+    return CompositeMarketScreener(providers)
+
+
+def _build_prefilter(
+    args: argparse.Namespace,
+    config: Any,
+) -> tuple[list[PrefilterCandidate], dict[str, Any]]:
+    if args.source == "manual":
+        if not args.stocks:
+            raise ValueError("manual source requires --stocks")
+        candidates = _manual_candidates(args.stocks.split(","), source="manual")
+        return candidates, {"provider_by_metric": {"manual": "manual"}, "failures": {}}
+    if args.source == "watchlist":
+        config.refresh_stock_list()
+        candidates = _manual_candidates(config.stock_list, source="watchlist")
+        return candidates, {"provider_by_metric": {"watchlist": "watchlist"}, "failures": {}}
+
+    screener = _build_market_screener(args)
+    screens = {}
+    metric_errors: dict[str, str] = {}
+    for metric in args.metrics:
+        try:
+            screens[metric] = screener.screen(
+                metric=metric,
+                top_n=args.screen_per_metric,
+            )
+        except Exception as exc:  # noqa: BLE001 - one metric may degrade safely
+            metric_errors[metric] = f"{type(exc).__name__}: {exc}"
+            logger.warning("筛选指标 %s 不可用，继续使用其他指标: %s", metric, exc)
+
+    if not screens:
+        raise RuntimeError(f"所有市场筛选指标均失败: {metric_errors}")
+
+    candidates = build_candidate_pool(
         screens,
         limit=args.candidate_limit,
         min_amount=args.min_amount,
     )
+    diagnostics = {
+        "requested_metrics": list(args.metrics),
+        "usable_metrics": list(screens),
+        "metric_errors": metric_errors,
+        "provider_by_metric": dict(screener.provider_by_metric),
+        "provider_failures": {
+            metric: list(messages)
+            for metric, messages in screener.failures_by_metric.items()
+        },
+    }
+    return candidates, diagnostics
 
 
 def _load_upstream_lock() -> dict:
@@ -131,7 +182,7 @@ def main() -> int:
         return 0
 
     try:
-        prefilter = _build_prefilter(args, config)
+        prefilter, screening_diagnostics = _build_prefilter(args, config)
     except Exception as exc:  # noqa: BLE001 - CLI must return a controlled failure
         logger.exception("候选池构建失败: %s", exc)
         return 2
@@ -142,6 +193,7 @@ def main() -> int:
 
     codes = [item.code for item in prefilter]
     logger.info("AI 选股候选池(%s): %s", len(codes), ", ".join(codes))
+    logger.info("候选数据源: %s", screening_diagnostics.get("provider_by_metric"))
 
     pipeline = StockAnalysisPipeline(
         config=config,
@@ -167,6 +219,7 @@ def main() -> int:
             "screen_per_metric": args.screen_per_metric,
             "candidate_limit": args.candidate_limit,
             "min_amount": args.min_amount,
+            "screening": screening_diagnostics,
             "agent_mode": bool(getattr(config, "agent_mode", False)),
             "agent_arch": str(getattr(config, "agent_arch", "single")),
             "models_used": sorted(
