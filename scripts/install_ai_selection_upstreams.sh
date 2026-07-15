@@ -52,15 +52,29 @@ create_venv() {
   "$target/bin/python" -m pip install --upgrade pip setuptools wheel
 }
 
+verify_vibe_import() {
+  # Both repositories expose a top-level package named "src". Running the
+  # verification from the host repository would import the host package first.
+  # Move to a clean directory and remove inherited Python path variables so the
+  # independently installed Vibe package is the only eligible "src" package.
+  local verify_dir
+  verify_dir="$(mktemp -d)"
+  (
+    cd "$verify_dir"
+    env -u PYTHONPATH -u PYTHONHOME "$ROOT/venvs/vibe/bin/python" - <<'PY'
+from src.tools.market_screener_tool import MarketScreenerTool
+assert MarketScreenerTool.name == "screen_market"
+print("Vibe-Trading isolated import verification passed")
+PY
+  )
+  rm -rf "$verify_dir"
+}
+
 echo "[1/2] Installing Vibe-Trading read-only research sidecar"
 clone_pin "vibe-trading" "https://github.com/HKUDS/Vibe-Trading.git" "$VIBE_SHA"
 create_venv "$ROOT/venvs/vibe"
 "$ROOT/venvs/vibe/bin/python" -m pip install -e "$ROOT/src/vibe-trading[ashare]"
-"$ROOT/venvs/vibe/bin/python" - <<'PY'
-from src.tools.market_screener_tool import MarketScreenerTool
-assert MarketScreenerTool.name == "screen_market"
-print("Vibe-Trading import verification passed")
-PY
+verify_vibe_import
 
 if [[ "$WITH_TRADINGAGENTS" == "1" ]]; then
   echo "[2/2] Installing TradingAgents research lab (not in the production order path)"
