@@ -1,5 +1,7 @@
+import importlib.util
 import json
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -10,6 +12,15 @@ from src.ai_selection.screening import (
     _parse_json_output,
     build_candidate_pool,
 )
+
+
+def _load_vibe_bridge_module():
+    bridge_path = Path(__file__).resolve().parents[1] / "scripts" / "vibe_market_screen.py"
+    spec = importlib.util.spec_from_file_location("vibe_market_screen_bridge", bridge_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_candidate_pool_fuses_metrics_and_filters_risky_rows():
@@ -49,6 +60,42 @@ def test_vibe_output_parser_uses_last_json_line():
         "notice\n" + json.dumps({"ok": True, "data": {"rows": []}})
     )
     assert payload["ok"] is True
+
+
+def test_vibe_bridge_normalizes_eastmoney_a_share_units():
+    bridge = _load_vibe_bridge_module()
+    raw = {
+        "ok": True,
+        "source": "eastmoney",
+        "data": {
+            "rows": [
+                {
+                    "code": "002384",
+                    "name": "东山精密",
+                    "price": 26249,
+                    "change_pct": 81,
+                    "change": 212,
+                    "volume": 1_391_335,
+                    "amount": 37_257_847_529.77,
+                    "turnover_rate": 1004,
+                }
+            ]
+        },
+    }
+
+    normalized = bridge.normalize_payload(raw, market="a")
+    row = normalized["data"]["rows"][0]
+
+    assert row["price"] == 262.49
+    assert row["change_pct"] == 0.81
+    assert row["change"] == 2.12
+    assert row["volume"] == 139_133_500.0
+    assert row["turnover_rate"] == 10.04
+    assert row["amount"] == 37_257_847_529.77
+    assert (
+        normalized["data"]["unit_contract"]["normalization_version"]
+        == "a_share_eastmoney_v1"
+    )
 
 
 class FakeTusharePro:
