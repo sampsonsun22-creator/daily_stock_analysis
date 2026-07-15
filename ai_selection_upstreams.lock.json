@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "upstreams": [
+    {
+      "name": "Vibe-Trading",
+      "repository": "HKUDS/Vibe-Trading",
+      "commit": "ac6424ed4640d009880ec5a97c13f71ef050e4b2",
+      "license": "MIT",
+      "production_role": "read-only A-share market screening sidecar"
+    },
+    {
+      "name": "TradingAgents",
+      "repository": "TauricResearch/TradingAgents",
+      "commit": "01477f9afb7a47b849ed4c9259d3a9a4738d9fda",
+      "license": "Apache-2.0",
+      "production_role": "disabled; optional research lab only"
+    }
+  ]
+}
