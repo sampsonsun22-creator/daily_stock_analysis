@@ -128,7 +128,7 @@ jobs:
 
           mkdir -p data/ai_selection logs reports
           python ai_select.py \
-            --source vibe \
+            --source market \
             --metrics amount,turnover \
             --screen-per-metric 60 \
             --candidate-limit "$CANDIDATE_LIMIT" \
